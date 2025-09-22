@@ -608,6 +608,10 @@ contains
       call error("Range separation requires the Stratmann solver for excitations")
     end if
 
+    if (this%tTDA .and. this%tSpin) then
+       call error("Tamm-Dancoff Approximation is only implemented for spin-unpolarized Systems")
+    endif
+
     call env%globalTimer%stopTimer(globalTimers%lrSetup)
 
     do isym = 1, size(symmetries)
@@ -1247,7 +1251,7 @@ contains
     ! matrices M_plus, M_minus, M_minus^(1/2), M_minus^(-1/2) and M_herm~=resp. mat on subspace
     real(dp), allocatable :: mP(:,:), mM(:,:), mMsqrt(:,:), mMsqrtInv(:,:), mH(:,:)
     ! Residual vectors
-    real(dp), allocatable :: resR(:,:), resL(:,:), dummyM(:,:)
+    real(dp), allocatable :: resR(:,:), resL(:,:), dummyM(:,:), dummyTDA(:,:)
     real(dp), allocatable :: evalInt(:) ! store eigenvectors within routine
     real(dp), allocatable :: vecNorm(:) ! will hold norms of residual vectors
     real(dp) :: dummyReal
@@ -1265,6 +1269,11 @@ contains
     if (allocated(lr%onSiteMatrixElements)) then
       write(tmpStr,'(A)') 'Onsite corrections not available in Stratmann diagonaliser.'
       call error(tmpStr)
+    endif
+
+    if (lr%tTDA) then
+        write(stdOut,'(A)') ' '
+        write(stdOut,'(A)') '>> Using Tamm-Dancoff Approximation in Linear Response'
     endif
 
     ! Number of excited states to solve for
@@ -1328,12 +1337,17 @@ contains
 
           call actionAplusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, sym, denseDesc,&
               & species0, ovrXev, grndEigVecs, gammaMat, .true., vecB(:,ii), vP(:,ii), lrGamma)
-          call actionAminusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, denseDesc,&
-              & ovrXev, grndEigVecs, vecB(:,ii), vM(:,ii), lrGamma)
+
+          if (lr%tTDA) then
+             vM(:,ii) = vP(:,ii)
+          else
+            call actionAminusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, denseDesc,&
+                & ovrXev, grndEigVecs, vecB(:,ii), vM(:,ii), lrGamma)
+          endif
 
         end do
 
-       do ii = prevSubSpaceDim + 1, subSpaceDim
+        do ii = prevSubSpaceDim + 1, subSpaceDim
           do jj = 1, ii
             dummyReal = dot_product(vecB(:,jj), vP(:,ii))
             call assembleChunks(env, dummyReal)
@@ -1350,14 +1364,18 @@ contains
         ! We need (A+B)_iajb. Could be realized by calls to actionAplusB.
         ! Specific routine for this task is more effective
         call initialSubSpaceMatrixApmB(iGlobal, fGlobal, env, lr, rpa, transChrg, sym, denseDesc,&
-            & species0, ovrXev, grndEigVecs, gammaMat, lrGamma, subSpaceDim, vP, vM, mP, mM)
+          & species0, ovrXev, grndEigVecs, gammaMat, lrGamma, subSpaceDim, vP, vM, mP, mM)
 
       end if
 
-      call calcMatrixSqrt(mM, subSpaceDim, mMsqrt, mMsqrtInv)
+      if (lr%tTDA) then
+         mH = mP
+      else
+        call calcMatrixSqrt(mM, subSpaceDim, mMsqrt, mMsqrtInv)
 
-      call symm(dummyM, 'L', mP, mMsqrt, uplo='U')
-      call symm(mH, 'L', mMsqrt, dummyM, uplo='U')
+        call symm(dummyM, 'L', mP, mMsqrt, uplo='U')
+        call symm(mH, 'L', mMsqrt, dummyM, uplo='U')
+      endif
 
       ! Diagonalise in subspace
       call heev(mH, evalInt, 'U', 'V', info)
@@ -1382,42 +1400,63 @@ contains
       ! Calc. |R_n>=|X+Y>=(A-B)^(1/2)T and |L_n>=|X-Y>=(A-B)^(-1/2)T.
       ! Transformation preserves orthonormality.
       ! Only compute up to nExc index, because only that much needed.
-      call symm(evecR, 'L', Mmsqrt, Mh, uplo='U')
-      call symm(evecL, 'L', Mmsqrtinv, Mh, uplo='U')
+      if (lr%tTDA) then
+        call gemm(vM,vecB,Mh)
+      else
+        call symm(evecR, 'L', Mmsqrt, Mh, uplo='U')
+        call symm(evecL, 'L', Mmsqrtinv, Mh, uplo='U')
 
-      ! Need |X-Y>=sqrt(w)(A-B)^(-1/2)T, |X+Y>=(A-B)^(1/2)T/sqrt(w) for proper solution to original
-      ! EV problem, only use first nExc vectors
-      do ii = 1, nExc
-        dummyReal = sqrt(sqrt(evalInt(ii)))
-        evecR(:,ii) = evecR(:,ii) / dummyReal
-        evecL(:,ii) = evecL(:,ii) * dummyReal
-      end do
+        ! Need |X-Y>=sqrt(w)(A-B)^(-1/2)T, |X+Y>=(A-B)^(1/2)T/sqrt(w) for proper solution to original
+        ! EV problem, only use first nExc vectors
+        do ii = 1, nExc
+          dummyReal = sqrt(sqrt(evalInt(ii)))
+          evecR(:,ii) = evecR(:,ii) / dummyReal
+          evecL(:,ii) = evecL(:,ii) * dummyReal
+        end do
+      endif
 
       ! Calculate the residual vectors
-      !   calcs. all |R_n>
-      call gemm(resR, vecB, evecR)
-      !   calcs. all |L_n>
-      call gemm(resL, vecB, evecL)
+      if (lr%tTDA) then
+        allocate(dummyTDA(nLoc,subSpaceDim))
+        call gemm(dummyTDA, vP, Mh)
+        do ii = 1, nExc
+          resR(:,ii) = dummyTDA(:,ii) - evalInt(ii) * vM(:,ii)
+        end do
+        deallocate(dummyTDA)
 
-      do ii = 1, nExc
-        dummyReal = -sqrt(evalInt(ii))
-        resR(:,ii) = dummyReal * resR(:,ii)
-        resL(:,ii) = dummyReal * resL(:,ii)
-      end do
+      else
+        !   calcs. all |R_n>
+        call gemm(resR, vecB, evecR)
+        !   calcs. all |L_n>
+        call gemm(resL, vecB, evecL)
 
-      ! (A-B)|L_n> for all n=1,..,nExc
-      call gemm(resR, vM, evecL, beta=1.0_dp)
-      ! (A+B)|R_n> for all n=1,..,nExc
-      call gemm(resL, vP, evecR, beta=1.0_dp)
+        do ii = 1, nExc
+          dummyReal = -sqrt(evalInt(ii))
+          resR(:,ii) = dummyReal * resR(:,ii)
+          resL(:,ii) = dummyReal * resL(:,ii)
+        end do
+
+        ! (A-B)|L_n> for all n=1,..,nExc
+        call gemm(resR, vM, evecL, beta=1.0_dp)
+        ! (A+B)|R_n> for all n=1,..,nExc
+        call gemm(resL, vP, evecR, beta=1.0_dp)
+
+      endif
 
       ! calc. norms of residual vectors to check for convergence
       do ii = 1, nExc
         dummyReal = dot_product(resR(:,ii), resR(:,ii))
         call assembleChunks(env, dummyReal)
         vecNorm(ii) = dummyReal
-        dummyReal = dot_product(resL(:,ii), resL(:,ii))
-        call assembleChunks(env, dummyReal)
-        vecNorm(nExc+ii) = dummyReal
+
+        if (lr%tTDA) then
+          vecNorm(nExc+ii) = 0.0_dp
+        else
+          dummyReal = dot_product(resL(:,ii), resL(:,ii))
+          call assembleChunks(env, dummyReal)
+          vecNorm(nExc+ii) = dummyReal
+        endif
+
       end do
       didConverge = all(vecNorm < convThreshStrat)
 
@@ -1429,19 +1468,34 @@ contains
 
       ! if converged then exit loop:
       if (didConverge) then
+        if (lr%tTDA) then
+          eval(:) = evalInt(1:nExc) * evalInt(1:nExc)
 
-        eval(:) = evalInt(1:nExc)
+          ! In TDA: |X+Y> = |X-Y> = |X>
+          xpy(:,:) = 0.0_dp
+          xpy(iGlobal:fGlobal,:) = vM(:,1:nExc)
+          call assembleChunks(env, xpy)
 
-        ! Calc. X+Y
-        xpy(:,:) = 0.0_dp
-        xpy(iGlobal:fGlobal,:) = matmul(vecB, evecR)
-        call assembleChunks(env, xpy)
+          if (rpa%tZVector) then
+            xmy(iGlobal:fGlobal,:) = vM(:,1:nExc)
+            call assembleChunks(env, xmy)
+          end if
 
-        ! Calc. X-Y, only when needed
-        if (rpa%tZVector) then
-          xmy(iGlobal:fGlobal,:) = matmul(vecB, evecL)
-          call assembleChunks(env, xmy)
-        end if
+        else
+          eval(:) = evalInt(1:nExc)
+
+          ! Calc. X+Y
+          xpy(:,:) = 0.0_dp
+          xpy(iGlobal:fGlobal,:) = matmul(vecB, evecR)
+          call assembleChunks(env, xpy)
+
+          ! Calc. X-Y, only when needed
+          if (rpa%tZVector) then
+            xmy(iGlobal:fGlobal,:) = matmul(vecB, evecL)
+            call assembleChunks(env, xmy)
+          end if
+
+        endif
 
         write(stdOut,'(A)') '>> Stratmann converged'
         exit solveLinResp ! terminate diag. routine
@@ -1461,32 +1515,50 @@ contains
             & mMsqrtInv, dummyM, evalInt, evecL, evecR)
 
       iVec = 0
-      do ii = 1, nExc
-        if (vecNorm(ii) > convThreshStrat) then
-          iVec = iVec + 1
-          dummyReal = sqrt(evalInt(ii))
-          dummyInt = subSpaceDim + iVec
+      if (lr%tTDA) then
+        do ii = 1, nExc
+          if (vecNorm(ii) > convThreshStrat) then
+            iVec = iVec + 1
+            dummyReal = evalInt(ii)
+            dummyInt = subSpaceDim + iVec
 
-          do jj = iGlobal, fGlobal
-            myjj = jj - iGlobal + 1
-            vecB(myjj,dummyInt) = resR(myjj,ii) / (dummyReal - rpa%wij(jj))
-          end do
+            do jj = iGlobal, fGlobal
+              myjj = jj - iGlobal + 1
+              vecB(myjj,dummyInt) = resR(myjj,ii) / (dummyReal - rpa%wij(jj))
+            end do
 
-        end if
-      end do
+          end if
+        end do
 
-      do ii = 1, nExc
-        if (vecNorm(nExc+ii) > convThreshStrat) then
-          iVec = iVec + 1
-          dummyInt = subSpaceDim + iVec
+      else
+        do ii = 1, nExc
+          if (vecNorm(ii) > convThreshStrat) then
+            iVec = iVec + 1
+            dummyReal = sqrt(evalInt(ii))
+            dummyInt = subSpaceDim + iVec
 
-          do jj = iGlobal, fGlobal
-            myjj = jj - iGlobal + 1
-            vecB(myjj,dummyInt) = resL(myjj,ii) / (dummyReal - rpa%wij(jj))
-          end do
+            do jj = iGlobal, fGlobal
+              myjj = jj - iGlobal + 1
+              vecB(myjj,dummyInt) = resR(myjj,ii) / (dummyReal - rpa%wij(jj))
+            end do
 
-        end if
-      end do
+          end if
+        end do
+
+        do ii = 1, nExc
+          if (vecNorm(nExc+ii) > convThreshStrat) then
+            iVec = iVec + 1
+            dummyInt = subSpaceDim + iVec
+
+            do jj = iGlobal, fGlobal
+              myjj = jj - iGlobal + 1
+              vecB(myjj,dummyInt) = resL(myjj,ii) / (dummyReal - rpa%wij(jj))
+            end do
+
+          end if
+        end do
+
+      endif
 
       prevSubSpaceDim = subSpaceDim
       subSpaceDim = subSpaceDim + newVec
@@ -1500,6 +1572,7 @@ contains
 
       ! create orthogonal basis
       call orthonormalizeVectors(env, prevSubSpaceDim + 1, subSpaceDim, vecB)
+
 
     end do solveLinResp
 

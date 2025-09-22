@@ -488,6 +488,7 @@ contains
     real(dp) :: vout_ons(size(vin))
     real(dp), allocatable :: vLoc(:), vGlb(:), vGlb2(:)
     real(dp), parameter :: spinFactor(2) = [1.0_dp, -1.0_dp]
+    real(dp) :: tdaFactor
     ! for later use to change HFX contribution
     real(dp), allocatable :: qv(:,:)
 
@@ -524,6 +525,11 @@ contains
 
     if (.not. lr%tSpin) then !-----------spin-unpolarized systems--------------
 
+      tdaFactor = 4.0_dp ! Full Casida
+      if (lr%tTDA) then
+        tdaFactor = 2.0_dp
+      endif
+
       if (sym == 'S') then
 
         call hemv(gtmp, frGamma, otmp)
@@ -533,7 +539,7 @@ contains
         do ia = iGlobal, fGlobal
           myia = ia - iGlobal + 1
           qij(:) = transChrg%qTransIA(ia, env, denseDesc, ovrXev, grndEigVecs, rpa%getIA, rpa%win)
-          vOut(myia) = 4.0_dp * rpa%sqrOccIA(ia) * dot_product(qij, gTmp)
+          vOut(myia) = tdaFactor * rpa%sqrOccIA(ia) * dot_product(qij, gTmp)
         enddo
 
       else
@@ -544,7 +550,7 @@ contains
         vOut(:) = 0.0_dp
         call transChrg%qVecMat(env, denseDesc, ovrXev, grndEigVecs, rpa%getIA, rpa%win, oTmp, vOut,&
             & iGlobal-1)
-        vOut(:) = 4.0_dp * rpa%sqrOccIA(iGlobal:fGlobal) * vOut
+        vOut(:) = tdaFactor * rpa%sqrOccIA(iGlobal:fGlobal) * vOut
 
 
       end if
@@ -943,7 +949,7 @@ contains
     integer :: nMat, ia, jb, ii, jj, ss, tt
     real(dp), allocatable :: oTmp(:), gTmp(:), qTr(:)
     real(dp), parameter :: spinFactor(2) = [1.0_dp, -1.0_dp]
-    real(dp) :: rTmp
+    real(dp) :: rTmp, tdaFactor
     integer :: aa, bb, iat, jbs, abs, ijs, ibs, jas
     integer :: nLoc, myia, myii
 
@@ -967,6 +973,11 @@ contains
     !-----------spin-unpolarized systems--------------
     if (.not. lr%tSpin) then
 
+      tdaFactor = 4.0_dp
+      if (lr%tTDA) then
+        tdaFactor = 2.0_dp
+      endif
+
       if (sym == 'S') then
 
         ! Full range coupling matrix contribution: 4 * sum_A q^ia_A sum_B gamma_AB q^jb_B
@@ -980,7 +991,7 @@ contains
             myia = ia - iGlobal + 1
             qTr(:) = transChrg%qTransIA(ia, env, denseDesc, ovrXev, grndEigVecs,&
                 & rpa%getIA, rpa%win)
-            vP(myia,jb) = 4.0_dp * rpa%sqrOccIA(ia) * dot_product(qTr, oTmp)
+            vP(myia,jb) = tdaFactor * rpa%sqrOccIA(ia) * dot_product(qTr, oTmp)
           end do
 
         end do
@@ -996,7 +1007,7 @@ contains
             myia = ia - iGlobal + 1
             qTr(:) = transChrg%qTransIA(ia, env, denseDesc, ovrXev, grndEigVecs, rpa%getIA,&
                 & rpa%win)
-            vP(myia,jb) = vP(myia,jb) + 4.0_dp * rpa%sqrOccIA(ia) * dot_product(qTr, oTmp)
+            vP(myia,jb) = vP(myia,jb) + tdaFactor * rpa%sqrOccIA(ia) * dot_product(qTr, oTmp)
           end do
 
         end do
