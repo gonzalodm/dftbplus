@@ -1092,7 +1092,7 @@ contains
       ! Action of excitation supermatrix on supervector
       call actionAplusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, sym, denseDesc, species0,&
           & ovrXev, grndEigVecs, gammaMat, .false., workd(ipntr(1):ipntr(1)+nLoc-1),&
-          & workd(ipntr(2):ipntr(2)+nLoc-1))
+          & workd(ipntr(2):ipntr(2)+nLoc-1), .false.)
 
     end do
 
@@ -1149,7 +1149,7 @@ contains
 
         call actionAplusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, sym, denseDesc, species0,&
           & ovrXev, grndEigVecs, gammaMat, .false., xpy(iGlobal:fGlobal,iState),&
-          & Hv(iGlobal:fGlobal))
+          & Hv(iGlobal:fGlobal), .false.)
 
         call assembleChunks(env, Hv)
 
@@ -1292,7 +1292,7 @@ contains
 
     write(stdOut,'(A)')
     write(stdOut,'(A)') '>> Stratmann diagonalisation of response matrix'
-    write(stdOut,'(3x,A,i6,A,i6)') 'Total dimension of A+B: ', rpa%nxov_rd, ' inital subspace: ',&
+    write(stdOut,'(3x,A,i6,A,i6)') 'Total dimension of A+B: ', rpa%nxov_rd, ' initial subspace: ',&
       & subSpaceDim
 
     allocate(mP(subSpaceDim, subSpaceDim))
@@ -1336,7 +1336,8 @@ contains
         do ii = prevSubSpaceDim + 1, subSpaceDim
 
           call actionAplusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, sym, denseDesc,&
-              & species0, ovrXev, grndEigVecs, gammaMat, .true., vecB(:,ii), vP(:,ii), lrGamma)
+              & species0, ovrXev, grndEigVecs, gammaMat, .true., vecB(:,ii), vP(:,ii),&
+              & lr%tTDA, lrGamma)
 
           if (lr%tTDA) then
              vM(:,ii) = vP(:,ii)
@@ -2214,7 +2215,7 @@ contains
     ! we need the singlet action even for triplet excitations!
     call actionAplusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, 'S', denseDesc, species0,&
         & ovrXev, grndEigVecs, gammaMat, .true., rhs2(iGlobal:fGlobal), rkm1(iGlobal:fGlobal),&
-        & lrGamma)
+        & .false., lrGamma)
 
     call assembleChunks(env, rkm1)
 
@@ -2229,7 +2230,7 @@ contains
       apk = 0.0_dp
       call actionAplusB(iGlobal, fGlobal, env, orb, lr, rpa, transChrg, 'S', denseDesc, species0,&
           & ovrXev, grndEigVecs, gammaMat, .true., pkm1(iGlobal:fGlobal), apk(iGlobal:fGlobal),&
-          & lrGamma)
+          & .false., lrGamma)
 
       call assembleChunks(env, apk)
 
